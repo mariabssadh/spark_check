@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from spark_check.data import (
+    DATA_PATH_ENV,
     FEATURE_COLUMNS,
     PROCESSED_PATH,
     RISK_LABEL,
@@ -152,11 +153,24 @@ def test_split_is_reproducible_and_stratified():
     train_a, test_a = split_train_test(table)
     train_b, test_b = split_train_test(table)
 
-    assert list(test_a["uid"]) == list(test_b["uid"]) 
-    assert list(train_a["uid"]) == list(train_b["uid"])         # same seed, same split
+    assert list(test_a["uid"]) == list(test_b["uid"])          # same seed, same split
+    assert list(train_a["uid"]) == list(train_b["uid"])
     assert len(test_a) == 4 and len(train_a) == 16
-    assert test_a[RISK_LABEL].sum() == 2   
-                          # half at risk, like the full table
+    assert test_a[RISK_LABEL].sum() == 2                         # half at risk, like the full table
+
+
+def test_data_path_can_be_set_with_environment_variable(tmp_path, monkeypatch):
+    csv = tmp_path / "students.csv"
+    valid_table().to_csv(csv, index=False)
+    monkeypatch.setenv(DATA_PATH_ENV, str(csv))      # e.g. inside a Docker container
+
+    assert len(load_processed()) == 10
+
+
+def test_missing_data_file_gives_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setenv(DATA_PATH_ENV, str(tmp_path / "nowhere.csv"))
+    with pytest.raises(FileNotFoundError, match=DATA_PATH_ENV):
+        load_processed()
 
 
 # --------------------------------------------------------------------------------------------

@@ -15,6 +15,7 @@ Everyone else just calls ``load_processed()``.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -47,8 +48,16 @@ SCORE_RANGES = {
     "phq9_post": (0, 27),
 }
 
+# Default location: data/processed/students.csv in the repo (works with `pip install -e .`).
+# In Docker or any non-editable install, set SPARK_CHECK_DATA to the CSV's path instead.
+DATA_PATH_ENV = "SPARK_CHECK_DATA"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROCESSED_PATH = REPO_ROOT / "data" / "processed" / "students.csv"
+
+
+def processed_path() -> Path:
+    """Where the cleaned table lives: SPARK_CHECK_DATA if set, otherwise the repo default."""
+    return Path(os.environ.get(DATA_PATH_ENV, PROCESSED_PATH))
 
 
 # --------------------------------------------------------------------------------------------
@@ -276,8 +285,14 @@ def split_train_test(
     )
 
 
-def load_processed(path: str | Path = PROCESSED_PATH) -> pd.DataFrame:
-    """Load the saved student table (the one committed in data/processed/) and validate it."""
+def load_processed(path: str | Path | None = None) -> pd.DataFrame:
+    """Load the saved student table and validate it.
+
+    Uses `path` if given, then the SPARK_CHECK_DATA environment variable, then the repo default.
+    """
+    path = Path(path) if path is not None else processed_path()
+    if not path.exists():
+        raise FileNotFoundError(f"Student table not found at {path}. Set {DATA_PATH_ENV} to its location.")
     df = pd.read_csv(path)
     validate_student_table(df)
     return df
@@ -289,7 +304,7 @@ def load_processed(path: str | Path = PROCESSED_PATH) -> pd.DataFrame:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Build the cleaned Spark Check student table.")
     parser.add_argument("--raw-dir", help="Folder with the raw survey CSVs (default: download from Kaggle)")
-    parser.add_argument("--out", default=str(PROCESSED_PATH), help="Where to save the table")
+    parser.add_argument("--out", default=str(processed_path()), help="Where to save the table")
     args = parser.parse_args(argv)
 
     students = build_student_table(load_raw_surveys(args.raw_dir))
