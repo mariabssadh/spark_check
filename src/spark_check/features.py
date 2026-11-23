@@ -14,7 +14,7 @@ from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 from spark_check.data import FEATURE_COLUMNS
 
-# Nested feature sets compared in 674. Final models: Ridge + A (score), Logistic Regression + C (flag)
+# Nested feature sets compared in 674
 FEATURE_SETS = {
     "A": ["phq9_pre"],
     "B": ["phq9_pre", "loneliness_pre", "flourishing_pre"],
@@ -22,11 +22,15 @@ FEATURE_SETS = {
 }
 
 
-def make_preprocessor(features: list[str], log_phq9: bool = True) -> ColumnTransformer:
+def make_preprocessor(features: list[str], *, log_phq9: bool) -> ColumnTransformer:
     """Build the preprocessing steps for a given list of predictor columns.
 
     - phq9_pre: optional log1p (reduces right skew), then standardize
     - all other predictors: impute missing totals with the training median, then standardize
+
+    log_phq9 has no default on purpose, because the two final 674 models differ:
+    - Ridge + Feature Set A (score):            log_phq9=False  (RMSE 4.02 vs 4.70 with the log)
+    - Logistic Regression + Feature Set C (flag): log_phq9=True
     """
     transformers = []
 

@@ -178,11 +178,24 @@ def test_missing_data_file_gives_clear_error(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------------------------
 def test_preprocessor_fills_missing_and_standardizes():
     table = valid_table()
-    prepared = make_preprocessor(FEATURE_SETS["C"]).fit_transform(table[FEATURE_COLUMNS])
+    prepared = make_preprocessor(FEATURE_SETS["C"], log_phq9=True).fit_transform(table[FEATURE_COLUMNS])
 
     assert prepared.shape == (len(table), 5)
     assert not np.isnan(prepared).any()                         # missing flourishing imputed
     assert np.allclose(prepared[:, 0].mean(), 0)                # phq9_pre standardized
+
+
+def test_preprocessor_requires_choosing_the_log_option():
+    # No default, so retraining can't silently use the wrong setting for either final model
+    with pytest.raises(TypeError):
+        make_preprocessor(FEATURE_SETS["A"])
+
+
+def test_log_option_changes_phq9_values():
+    scores = pd.DataFrame({"phq9_pre": [0, 2, 5, 20]})
+    with_log = make_preprocessor(FEATURE_SETS["A"], log_phq9=True).fit_transform(scores)
+    without_log = make_preprocessor(FEATURE_SETS["A"], log_phq9=False).fit_transform(scores)
+    assert not np.allclose(with_log, without_log)
 
 
 # --------------------------------------------------------------------------------------------
