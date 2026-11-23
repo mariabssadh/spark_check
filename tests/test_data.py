@@ -152,9 +152,11 @@ def test_split_is_reproducible_and_stratified():
     train_a, test_a = split_train_test(table)
     train_b, test_b = split_train_test(table)
 
-    assert list(test_a["uid"]) == list(test_b["uid"])          # same seed, same split
+    assert list(test_a["uid"]) == list(test_b["uid"]) 
+    assert list(train_a["uid"]) == list(train_b["uid"])         # same seed, same split
     assert len(test_a) == 4 and len(train_a) == 16
-    assert test_a[RISK_LABEL].sum() == 2                         # half at risk, like the full table
+    assert test_a[RISK_LABEL].sum() == 2   
+                          # half at risk, like the full table
 
 
 # --------------------------------------------------------------------------------------------
