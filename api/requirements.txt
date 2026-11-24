@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+prometheus-client
+psycopg[binary]
+pandas
+mlflow-skinny
