@@ -3,3 +3,5 @@ ruff
 pandas
 numpy
 scikit-learn
+mlflow
+prefect
