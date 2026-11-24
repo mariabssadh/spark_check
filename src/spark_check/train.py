@@ -1,4 +1,7 @@
-"""Train candidate models, track each one as a run in MLflow, and register the best ones.
+"""Spark Check training pipeline, orchestrated with Prefect.
+
+The flow trains every candidate model, tracks each one as a run in MLflow, and registers the
+best model of each experiment in the MLflow Model Registry (alias "champion").
 
 Two experiments, one per prediction:
 - spark-check-score: predict the end-of-term PHQ-9 score (regression, RMSE first)
@@ -12,6 +15,8 @@ import warnings
 import mlflow
 import mlflow.sklearn
 import numpy as np
+from prefect import flow, task
+
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -98,7 +103,19 @@ def risk_metrics(y_true, y_pred, prefix):
         f"{prefix}_balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
     }
 
+@task
+def load_and_split():
+    """Load the cleaned student table (validated by spark_check.data) and split it 80/20."""
+    df = load_processed()
+    return split_train_test(df)
 
+
+@task
+def make_cv_splits(train):
+    """Same 30 CV splits for every model, stratified so each split has at-risk students."""
+    return list(RepeatedStratifiedKFold(n_splits=3, n_repeats=10, random_state=42).split(train, train[RISK_LABEL]))
+
+@task
 def train_and_log(name, model, feature_set, log_phq9, task, train, test, cv):
     """Train one candidate, evaluate it, and record everything as one MLflow run."""
     target = TARGET if task == "score" else RISK_LABEL
@@ -150,7 +167,7 @@ def train_and_log(name, model, feature_set, log_phq9, task, train, test, cv):
 
     return run.info.run_id, metrics
 
-
+@task
 def register_best(results, main_metric, higher_is_better, model_name):
     """Pick the best candidate (baselines excluded) and put it in the MLflow Model Registry.
 
@@ -170,33 +187,35 @@ def register_best(results, main_metric, higher_is_better, model_name):
     return best_name
 
 
-def main():
+@flow(name="spark-check-training", log_prints=True)
+def training_flow():
+    """Train all candidates for both experiments and register the best model of each."""
     logging.getLogger("mlflow").setLevel(logging.ERROR)  # hide MLflow's info messages
     # The at-risk models output 0/1 (whole numbers); that's expected, so hide MLflow's hint about it
     warnings.filterwarnings("ignore", message="Hint: Inferred schema contains integer")
     mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db"))
 
-    df = load_processed()
-    train, test = split_train_test(df)
+    train, test = load_and_split()
+    cv = make_cv_splits(train)
 
-    # Same 30 CV splits for every model, stratified so each split has at-risk students
-    cv = list(RepeatedStratifiedKFold(n_splits=3, n_repeats=10, random_state=42).split(train, train[RISK_LABEL]))
-
+    champions = {}
     # (task, candidates, metric to compare on, is higher better?)
-    for task, candidates, main_metric, higher_is_better in [
+    for task_name, candidates, main_metric, higher_is_better in [
         ("score", SCORE_CANDIDATES, "cv_rmse_mean", False),
         ("risk", RISK_CANDIDATES, "cv_recall_mean", True),
     ]:
-        mlflow.set_experiment(f"spark-check-{task}")
-        print(f"\n{task.upper()} models ({main_metric}):")
+        mlflow.set_experiment(f"spark-check-{task_name}")
+        print(f"{task_name.upper()} models ({main_metric}):")
         results = {}
         for name, model, feature_set, log_phq9 in candidates:
-            run_id, metrics = train_and_log(name, model, feature_set, log_phq9, task, train, test, cv)
+            run_id, metrics = train_and_log(name, model, feature_set, log_phq9, task_name, train, test, cv)
             results[name] = {"run_id": run_id, "metrics": metrics}
             print(f"  {name:20s} {metrics[main_metric]:.3f}")
 
-        register_best(results, main_metric, higher_is_better, model_name=f"spark-check-{task}")
+        champions[task_name] = register_best(results, main_metric, higher_is_better, f"spark-check-{task_name}")
+
+    return champions
 
 
 if __name__ == "__main__":
-    main()
+    training_flow()
