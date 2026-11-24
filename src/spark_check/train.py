@@ -1,4 +1,4 @@
-"""Step 3: train several candidate models and track each one as a run in MLflow.
+"""Train candidate models, track each one as a run in MLflow, and register the best ones.
 
 Two experiments, one per prediction:
 - spark-check-score: predict the end-of-term PHQ-9 score (regression, RMSE first)
@@ -15,7 +15,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
+from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
     balanced_accuracy_score,
     f1_score,
@@ -56,7 +56,6 @@ class Phq9Rule(BaseEstimator, ClassifierMixin):
 # --------------------------------------------------------------------------------------------
 SCORE_CANDIDATES = [
     ("baseline_mean", DummyRegressor(strategy="mean"), "A", False),
-    ("linear_A", LinearRegression(), "A", False),
     ("ridge_A", Ridge(alpha=3.0), "A", False),
     ("ridge_A_log", Ridge(alpha=3.0), "A", True),
     ("random_forest_C", RandomForestRegressor(n_estimators=100, min_samples_leaf=3, random_state=42), "C", False),
@@ -108,7 +107,7 @@ def train_and_log(name, model, feature_set, log_phq9, task, train, test, cv):
     X_test, y_test = test[FEATURE_COLUMNS], test[target]
     pipeline = build_pipeline(model, feature_set, log_phq9)
 
-    with mlflow.start_run(run_name=name):
+    with mlflow.start_run(run_name=name) as run:
         # 1. Cross-validation on the training students: 30 splits, our main estimate
         if task == "score":
             scoring = {"rmse": "neg_root_mean_squared_error", "mae": "neg_mean_absolute_error"}
@@ -149,7 +148,26 @@ def train_and_log(name, model, feature_set, log_phq9, task, train, test, cv):
                 serialization_format="cloudpickle",  # we only load models we trained ourselves
             )
 
-    return metrics
+    return run.info.run_id, metrics
+
+
+def register_best(results, main_metric, higher_is_better, model_name):
+    """Pick the best candidate (baselines excluded) and put it in the MLflow Model Registry.
+
+    The new version gets the alias "champion", which is what the API loads.
+    """
+    candidates = {name: r for name, r in results.items() if not name.startswith("baseline")}
+    pick = max if higher_is_better else min
+    best_name = pick(candidates, key=lambda name: candidates[name]["metrics"][main_metric])
+    best = candidates[best_name]
+
+    version = mlflow.register_model(f"runs:/{best['run_id']}/model", model_name)
+    client = mlflow.MlflowClient()
+    client.set_registered_model_alias(model_name, "champion", version.version)
+    client.set_model_version_tag(model_name, version.version, "candidate", best_name)
+
+    print(f"  -> registered {best_name} as {model_name} v{version.version} (@champion)")
+    return best_name
 
 
 def main():
@@ -164,15 +182,20 @@ def main():
     # Same 30 CV splits for every model, stratified so each split has at-risk students
     cv = list(RepeatedStratifiedKFold(n_splits=3, n_repeats=10, random_state=42).split(train, train[RISK_LABEL]))
 
-    for task, candidates, main_metric in [
-        ("score", SCORE_CANDIDATES, "cv_rmse_mean"),
-        ("risk", RISK_CANDIDATES, "cv_recall_mean"),
+    # (task, candidates, metric to compare on, is higher better?)
+    for task, candidates, main_metric, higher_is_better in [
+        ("score", SCORE_CANDIDATES, "cv_rmse_mean", False),
+        ("risk", RISK_CANDIDATES, "cv_recall_mean", True),
     ]:
         mlflow.set_experiment(f"spark-check-{task}")
         print(f"\n{task.upper()} models ({main_metric}):")
+        results = {}
         for name, model, feature_set, log_phq9 in candidates:
-            metrics = train_and_log(name, model, feature_set, log_phq9, task, train, test, cv)
+            run_id, metrics = train_and_log(name, model, feature_set, log_phq9, task, train, test, cv)
+            results[name] = {"run_id": run_id, "metrics": metrics}
             print(f"  {name:20s} {metrics[main_metric]:.3f}")
+
+        register_best(results, main_metric, higher_is_better, model_name=f"spark-check-{task}")
 
 
 if __name__ == "__main__":
