@@ -16,7 +16,6 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 from prefect import flow, task
-
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
