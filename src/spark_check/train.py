@@ -8,6 +8,7 @@ Two experiments, one per prediction:
 - spark-check-risk:  flag students at risk, PHQ-9 >= 10 (classification, recall first)
 """
 
+import argparse
 import logging
 import os
 import warnings
@@ -216,5 +217,33 @@ def training_flow():
     return champions
 
 
+# --------------------------------------------------------------------------------------------
+# Retraining: the drift alert starts the same flow through a Prefect deployment
+# --------------------------------------------------------------------------------------------
+DEPLOYMENT_NAME = "spark-check-training/retrain"
+
+
+def trigger_retraining(reason: str = "drift alert"):
+    """Start a new run of the training flow. Called when monitoring detects drift.
+
+    Needs the deployment to be running (python -m spark_check.train --serve).
+    """
+    from prefect.deployments import run_deployment
+
+    print(f"Retraining requested: {reason}")
+    return run_deployment(DEPLOYMENT_NAME, timeout=0)  # timeout=0: start it, don't wait
+
+
 if __name__ == "__main__":
-    training_flow()
+    parser = argparse.ArgumentParser(description="Spark Check training pipeline")
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="keep running and wait for retraining requests (Prefect deployment 'retrain')",
+    )
+    args = parser.parse_args()
+
+    if args.serve:
+        training_flow.serve(name="retrain")
+    else:
+        training_flow()
