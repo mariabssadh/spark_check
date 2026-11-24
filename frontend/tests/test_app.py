@@ -27,8 +27,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Bring in our web page program from app.py.
-# ("noqa: E402" tells the code checker this import is below the top on purpose.)
-from app import app  # noqa: E402
+from app import app
 
 # =====================================================================
 # STEP 2: One normal student with valid scores
