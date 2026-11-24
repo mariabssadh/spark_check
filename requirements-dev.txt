@@ -3,3 +3,6 @@ ruff
 pandas
 numpy
 scikit-learn
+fastapi
+httpx
+prometheus-client
