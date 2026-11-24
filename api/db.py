@@ -29,7 +29,16 @@ def save_prediction(inputs: dict, score: float, at_risk: bool, version: str) -> 
                 "INSERT INTO predictions (phq9_pre, loneliness_pre, flourishing_pre,"
                 " stress_pre, neuroticism_pre, predicted_phq9_post, at_risk,"
                 " model_version) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                (*inputs.values(), score, at_risk, version),
+                (
+                    inputs["phq9_pre"],
+                    inputs["loneliness_pre"],
+                    inputs["flourishing_pre"],
+                    inputs["stress_pre"],
+                    inputs["neuroticism_pre"],
+                    score,
+                    at_risk,
+                    version,
+                ),
             )
     except Exception:  # a database problem should never break a prediction
         log.exception("could not save prediction")
