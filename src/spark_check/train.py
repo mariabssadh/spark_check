@@ -1,55 +1,179 @@
-"""Step 2: train the Spark Check score model (Ridge) and track the run in MLflow."""
+"""Step 3: train several candidate models and track each one as a run in MLflow.
 
+Two experiments, one per prediction:
+- spark-check-score: predict the end-of-term PHQ-9 score (regression, RMSE first)
+- spark-check-risk:  flag students at risk, PHQ-9 >= 10 (classification, recall first)
+"""
+
+import logging
 import os
+import warnings
 
 import mlflow
 import mlflow.sklearn
 import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.dummy import DummyRegressor
-from sklearn.linear_model import Ridge
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
+from sklearn.metrics import (
+    balanced_accuracy_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    r2_score,
+    recall_score,
+)
+from sklearn.model_selection import RepeatedStratifiedKFold, cross_validate
 from sklearn.pipeline import Pipeline
+from sklearn.svm import SVC
 
-from spark_check.data import TARGET, load_processed, split_train_test
+from spark_check.data import (
+    FEATURE_COLUMNS,
+    RISK_CUTOFF,
+    RISK_LABEL,
+    TARGET,
+    load_processed,
+    split_train_test,
+)
 from spark_check.features import FEATURE_SETS, make_preprocessor
 
-# 0. Tell MLflow where to save runs (a local database file unless MLFLOW_TRACKING_URI is set)
-mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db"))
-mlflow.set_experiment("spark-check-score")
 
-# 1. Load the cleaned data and split it (same 80/20 split as INSY 674)
-df = load_processed()
-train, test = split_train_test(df)
+class Phq9Rule(BaseEstimator, ClassifierMixin):
+    """Today's screening rule, written as a model: flag a student if week-one PHQ-9 >= 10."""
 
-feature_set = "A"
-features = FEATURE_SETS[feature_set]  # Ridge uses PHQ-9 only
-X_train, y_train = train[features], train[TARGET]
-X_test, y_test = test[features], test[TARGET]
+    def fit(self, X, y):
+        self.classes_ = np.array([0, 1])
+        return self
 
-# The settings we want to record for this run
-params = {"model": "Ridge", "alpha": 3.0, "feature_set": feature_set, "log_phq9": False}
+    def predict(self, X):
+        return (X["phq9_pre"] >= RISK_CUTOFF).astype(int).to_numpy()
 
-with mlflow.start_run(run_name="ridge_A"):
-    # 2. Build and train the model: preprocessing + Ridge in one pipeline
-    model = Pipeline([
-        ("preprocessor", make_preprocessor(features, log_phq9=params["log_phq9"])),
-        ("model", Ridge(alpha=params["alpha"])),
+
+# --------------------------------------------------------------------------------------------
+# The candidates: (run name, model, feature set, log PHQ-9?). Settings come from INSY 674 tuning.
+# --------------------------------------------------------------------------------------------
+SCORE_CANDIDATES = [
+    ("baseline_mean", DummyRegressor(strategy="mean"), "A", False),
+    ("linear_A", LinearRegression(), "A", False),
+    ("ridge_A", Ridge(alpha=3.0), "A", False),
+    ("ridge_A_log", Ridge(alpha=3.0), "A", True),
+    ("random_forest_C", RandomForestRegressor(n_estimators=100, min_samples_leaf=3, random_state=42), "C", False),
+]
+
+RISK_CANDIDATES = [
+    ("baseline_phq9_rule", Phq9Rule(), "A", False),
+    ("logreg_A", LogisticRegression(C=0.1, class_weight="balanced", max_iter=1000), "A", True),
+    ("logreg_B", LogisticRegression(C=0.1, class_weight="balanced", max_iter=1000), "B", True),
+    ("logreg_C", LogisticRegression(C=0.1, class_weight="balanced", max_iter=1000), "C", True),
+    ("svc_C", SVC(C=3.0, kernel="linear", class_weight="balanced"), "C", True),
+    ("random_forest_C", RandomForestClassifier(n_estimators=100, class_weight="balanced", random_state=42), "C", True),
+]
+
+
+def build_pipeline(model, feature_set, log_phq9):
+    """Preprocessing + model in one pipeline. The PHQ-9 rule needs no preprocessing."""
+    if isinstance(model, Phq9Rule):
+        return model
+    features = FEATURE_SETS[feature_set]
+    return Pipeline([
+        ("preprocessor", make_preprocessor(features, log_phq9=log_phq9)),
+        ("model", model),
     ])
-    model.fit(X_train, y_train)
 
-    # 3. Evaluate on the test students, and compare with a baseline that predicts the mean
-    predictions = model.predict(X_test)
-    baseline = DummyRegressor(strategy="mean").fit(X_train, y_train)
-    metrics = {
-        "test_rmse": np.sqrt(mean_squared_error(y_test, predictions)),
-        "test_mae": mean_absolute_error(y_test, predictions),
-        "test_r2": r2_score(y_test, predictions),
-        "baseline_rmse": np.sqrt(mean_squared_error(y_test, baseline.predict(X_test))),
+
+def score_metrics(y_true, y_pred, prefix):
+    return {
+        f"{prefix}_rmse": np.sqrt(mean_squared_error(y_true, y_pred)),
+        f"{prefix}_mae": mean_absolute_error(y_true, y_pred),
+        f"{prefix}_r2": r2_score(y_true, y_pred),
     }
 
-    # 4. Record everything in MLflow: settings, results, and the trained model itself
-    mlflow.log_params(params)
-    mlflow.log_metrics(metrics)
-    mlflow.sklearn.log_model(model, name="model", input_example=X_train.head(3))
 
-    print(metrics)
+def risk_metrics(y_true, y_pred, prefix):
+    return {
+        f"{prefix}_recall": recall_score(y_true, y_pred, zero_division=0),
+        f"{prefix}_precision": precision_score(y_true, y_pred, zero_division=0),
+        f"{prefix}_f1": f1_score(y_true, y_pred, zero_division=0),
+        f"{prefix}_balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
+    }
+
+
+def train_and_log(name, model, feature_set, log_phq9, task, train, test, cv):
+    """Train one candidate, evaluate it, and record everything as one MLflow run."""
+    target = TARGET if task == "score" else RISK_LABEL
+    # Every model gets all 5 columns; its pipeline keeps only the ones in its feature set
+    X_train, y_train = train[FEATURE_COLUMNS], train[target]
+    X_test, y_test = test[FEATURE_COLUMNS], test[target]
+    pipeline = build_pipeline(model, feature_set, log_phq9)
+
+    with mlflow.start_run(run_name=name):
+        # 1. Cross-validation on the training students: 30 splits, our main estimate
+        if task == "score":
+            scoring = {"rmse": "neg_root_mean_squared_error", "mae": "neg_mean_absolute_error"}
+        else:
+            scoring = ["recall", "precision", "f1"]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cv_scores = cross_validate(pipeline, X_train, y_train, cv=cv, scoring=scoring)
+
+        metrics = {}
+        for metric in scoring:
+            values = np.abs(cv_scores[f"test_{metric}"])  # sklearn reports errors as negatives
+            metrics[f"cv_{metric}_mean"] = values.mean()
+            metrics[f"cv_{metric}_std"] = values.std()
+
+        # 2. Train on all training students, then check on the 8 held-out test students
+        pipeline.fit(X_train, y_train)
+        y_pred = pipeline.predict(X_test)
+        if task == "score":
+            metrics.update(score_metrics(y_test, y_pred, "test"))
+        else:
+            metrics.update(risk_metrics(y_test, y_pred, "test"))
+
+        # 3. Record settings, results and the trained model
+        mlflow.log_params({
+            "model": type(model).__name__,
+            "feature_set": feature_set,
+            "features": ", ".join(FEATURE_SETS[feature_set]),
+            "log_phq9": log_phq9,
+            **{k: v for k, v in model.get_params().items() if k in {"alpha", "C", "kernel", "n_estimators", "min_samples_leaf"}},
+        })
+        mlflow.log_metrics(metrics)
+        if not isinstance(model, Phq9Rule):  # the rule is a baseline, nothing to save
+            mlflow.sklearn.log_model(
+                pipeline,
+                name="model",
+                input_example=X_train.head(3).astype(float),  # decimals, so missing values are allowed
+                serialization_format="cloudpickle",  # we only load models we trained ourselves
+            )
+
+    return metrics
+
+
+def main():
+    logging.getLogger("mlflow").setLevel(logging.ERROR)  # hide MLflow's info messages
+    # The at-risk models output 0/1 (whole numbers); that's expected, so hide MLflow's hint about it
+    warnings.filterwarnings("ignore", message="Hint: Inferred schema contains integer")
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db"))
+
+    df = load_processed()
+    train, test = split_train_test(df)
+
+    # Same 30 CV splits for every model, stratified so each split has at-risk students
+    cv = list(RepeatedStratifiedKFold(n_splits=3, n_repeats=10, random_state=42).split(train, train[RISK_LABEL]))
+
+    for task, candidates, main_metric in [
+        ("score", SCORE_CANDIDATES, "cv_rmse_mean"),
+        ("risk", RISK_CANDIDATES, "cv_recall_mean"),
+    ]:
+        mlflow.set_experiment(f"spark-check-{task}")
+        print(f"\n{task.upper()} models ({main_metric}):")
+        for name, model, feature_set, log_phq9 in candidates:
+            metrics = train_and_log(name, model, feature_set, log_phq9, task, train, test, cv)
+            print(f"  {name:20s} {metrics[main_metric]:.3f}")
+
+
+if __name__ == "__main__":
+    main()
