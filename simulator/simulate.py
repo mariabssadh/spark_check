@@ -1,6 +1,9 @@
-"""Fake traffic: makes up students to send to the Spark Check API.
+"""Fake traffic: sends made-up students to the Spark Check API, with an exam-season drift switch.
 
-Each fake student is a copy of a real training student with small random changes.
+Normal mode: each fake student is a copy of a real training student with small random changes.
+Drift mode ("exam season"): same idea, but stress, depression and neuroticism go up and
+flourishing goes down, so the new students look different from the ones the model learned from.
+The monitoring job (Evidently + Grafana) should notice that difference and raise the alarm.
 """
 
 from __future__ import annotations
@@ -25,6 +28,16 @@ NOISE = {
     "neuroticism_pre": 3,
 }
 
+# Exam season: how far each score moves on average when drift is switched on.
+# More stressed, more depressed, more anxious, less flourishing.
+EXAM_SEASON_SHIFT = {
+    "phq9_pre": 6,
+    "loneliness_pre": 5,
+    "flourishing_pre": -8,
+    "stress_pre": 8,
+    "neuroticism_pre": 4,
+}
+
 
 def load_training_students() -> pd.DataFrame:
     """The 30 training students (same split as the notebook), with missing scores filled in."""
@@ -34,7 +47,7 @@ def load_training_students() -> pd.DataFrame:
 
 
 def make_students(
-    n: int, seed: int | None = None, base: pd.DataFrame | None = None
+    n: int, drift: bool = False, seed: int | None = None, base: pd.DataFrame | None = None
 ) -> pd.DataFrame:
     """Make `n` fake students by copying random training students and adding small changes."""
     rng = np.random.default_rng(seed)
@@ -46,6 +59,8 @@ def make_students(
     fake = pd.DataFrame(index=picked.index)
     for column in FEATURE_COLUMNS:
         values = picked[column] + rng.normal(0, NOISE[column], size=n)
+        if drift:
+            values = values + EXAM_SEASON_SHIFT[column]
         low, high = SCORE_RANGES[column]
         # Whole numbers inside the valid range, so the API accepts every fake student
         fake[column] = values.round().clip(low, high).astype(int)
