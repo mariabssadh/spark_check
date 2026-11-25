@@ -1,0 +1,253 @@
+{
+  "uid": "spark-check-monitoring",
+  "title": "Spark Check monitoring",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "API requests since start",
+      "description": "Cumulative counter for each API instance, route, and status.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "spark-check-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "custom": {
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "api_requests_total{job=\"spark-check-api\"}",
+          "legendFormat": "{{endpoint}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "API requests per second",
+      "description": "",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "spark-check-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "Unavailable",
+          "custom": {
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (endpoint) (rate(api_requests_total{job=\"spark-check-api\"}[1m]))",
+          "legendFormat": "{{endpoint}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "API p95 latency",
+      "description": "Estimated from the Prometheus latency histogram.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "spark-check-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unavailable",
+          "custom": {
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (endpoint, le) (rate(api_request_seconds_bucket{job=\"spark-check-api\"}[1m])))",
+          "legendFormat": "{{endpoint}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "API HTTP errors per second",
+      "description": "",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "spark-check-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "Unavailable",
+          "custom": {
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(api_requests_total{job=\"spark-check-api\",status=~\"[45]..\"}[1m]))",
+          "legendFormat": "HTTP {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Share of inputs with drift",
+      "description": "A gap means the window did not have enough complete prediction rows to calculate drift.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "spark-check-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "Unavailable",
+          "custom": {
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT window_end AS time, drift_share, model_version, reference_id\nFROM monitoring_results\nWHERE $__timeFilter(window_end)\nORDER BY window_end"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Predictions and matched outcomes",
+      "description": "",
+      "type": "timeseries",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "spark-check-postgres"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "custom": {
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT window_end AS time, prediction_count AS \"Predictions\", labeled_count AS \"Matched outcomes\", model_version, reference_id\nFROM monitoring_results\nWHERE $__timeFilter(window_end)\nORDER BY window_end"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Model performance",
+      "description": "PHQ-9 points. A gap means no observed outcomes were matched to this window.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "spark-check-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "custom": {
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT window_end AS time, mae AS \"MAE\", rmse AS \"RMSE\", model_version, reference_id\nFROM monitoring_results\nWHERE $__timeFilter(window_end) AND labeled_count > 0\nORDER BY window_end"
+        }
+      ]
+    }
+  ]
+}
