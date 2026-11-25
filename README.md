@@ -24,7 +24,7 @@ from start-of-term depression, loneliness, flourishing, stress, and neuroticism 
 Spark Check runs as a set of services that train the model, serve predictions through a web page, and monitor the model for drift, retraining it when new students start to look different from the training data. Every component except GitHub Actions runs as a container started with `docker compose up`.
 
 ```mermaid
-lowchart TB
+flowchart TB
     subgraph TRAIN["Training"]
         DATA[("Cleaned survey data")]
         FLOW["Prefect training flow"]
