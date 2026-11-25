@@ -8,6 +8,9 @@ The monitoring job (Evidently + Grafana) should notice that difference and raise
 
 from __future__ import annotations
 
+import time
+
+import httpx
 import numpy as np
 import pandas as pd
 
@@ -65,3 +68,24 @@ def make_students(
         # Whole numbers inside the valid range, so the API accepts every fake student
         fake[column] = values.round().clip(low, high).astype(int)
     return fake
+
+
+def send_students(students: pd.DataFrame, client: httpx.Client, delay: float = 0.0) -> dict:
+    """Send each student to POST /predict and count what happened."""
+    counts = {"sent": 0, "ok": 0, "at_risk": 0, "errors": 0}
+    for row in students.to_dict(orient="records"):
+        row = {column: int(value) for column, value in row.items()}
+        counts["sent"] += 1
+        try:
+            response = client.post("/predict", json=row)
+        except httpx.HTTPError:  # API down or unreachable: count it and keep going
+            counts["errors"] += 1
+            continue
+        if response.status_code == 200:
+            counts["ok"] += 1
+            counts["at_risk"] += response.json()["at_risk"]
+        else:
+            counts["errors"] += 1
+        if delay:
+            time.sleep(delay)
+    return counts
