@@ -4,10 +4,17 @@ Normal mode: each fake student is a copy of a real training student with small r
 Drift mode ("exam season"): same idea, but stress, depression and neuroticism go up and
 flourishing goes down, so the new students look different from the ones the model learned from.
 The monitoring job (Evidently + Grafana) should notice that difference and raise the alarm.
+
+Run it while the API is running on port 8000:
+
+    python -m simulator.simulate                     # 100 normal students
+    python -m simulator.simulate --drift --n 200     # 200 exam-season students
 """
 
 from __future__ import annotations
 
+import argparse
+import os
 import time
 
 import httpx
@@ -89,3 +96,49 @@ def send_students(students: pd.DataFrame, client: httpx.Client, delay: float = 0
         if delay:
             time.sleep(delay)
     return counts
+
+
+def wait_for_api(client: httpx.Client, timeout: float = 60.0) -> bool:
+    """Wait until GET /health answers, so the simulator can start before the API is ready."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if client.get("/health").status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(1)
+    return False
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Send fake students to the Spark Check API.")
+    parser.add_argument("--url", default=os.getenv("API_URL", "http://localhost:8000"))
+    parser.add_argument("--n", type=int, default=100, help="how many fake students to send")
+    parser.add_argument(
+        "--drift",
+        action="store_true",
+        default=os.getenv("DRIFT", "").lower() in {"1", "true", "on", "yes"},
+        help="exam-season mode: higher stress and depression",
+    )
+    parser.add_argument("--delay", type=float, default=0.1, help="seconds between requests")
+    parser.add_argument("--seed", type=int, default=None, help="same seed = same students")
+    args = parser.parse_args(argv)
+
+    mode = "EXAM SEASON (drift on)" if args.drift else "normal"
+    print(f"Sending {args.n} fake students to {args.url} in {mode} mode")
+
+    with httpx.Client(base_url=args.url, timeout=10) as client:
+        if not wait_for_api(client):
+            raise SystemExit(f"API at {args.url} did not answer /health")
+        students = make_students(args.n, drift=args.drift, seed=args.seed)
+        counts = send_students(students, client, delay=args.delay)
+
+    print(
+        f"Done: {counts['ok']}/{counts['sent']} answered, "
+        f"{counts['at_risk']} flagged at risk, {counts['errors']} errors"
+    )
+
+
+if __name__ == "__main__":
+    main()

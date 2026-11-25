@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from api.app import app
 from api.schemas import StudentScores
+from simulator import simulate
 from simulator.simulate import (
     FEATURE_COLUMNS,
     load_training_students,
@@ -61,3 +62,12 @@ def test_api_down_is_counted_not_a_crash():
     with httpx.Client(base_url="http://127.0.0.1:9", timeout=0.5) as client:
         counts = send_students(make_students(3, seed=5), client)
     assert counts["errors"] == 3
+
+
+def test_command_line_runs_against_the_api(monkeypatch, capsys):
+    with TestClient(app) as test_client:
+        monkeypatch.setattr(simulate.httpx, "Client", lambda **kwargs: test_client)
+        simulate.main(["--n", "5", "--delay", "0", "--seed", "1", "--drift"])
+    output = capsys.readouterr().out
+    assert "EXAM SEASON" in output
+    assert "5/5 answered" in output
