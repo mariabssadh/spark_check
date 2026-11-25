@@ -5,3 +5,6 @@ numpy
 scikit-learn
 mlflow
 prefect
+fastapi
+httpx
+prometheus-client
