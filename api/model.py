@@ -46,7 +46,10 @@ class _MlflowBase:
         self.version = uri
 
     def _predict(self, row: dict) -> float:
-        return float(self._model.predict(self._pd.DataFrame([row]))[0])
+        # The registered models expect float columns (schema logged as double so
+        # missing values are allowed); MLflow refuses to convert int64 itself.
+        frame = self._pd.DataFrame([row]).astype(float)
+        return float(self._model.predict(frame)[0])
 
 
 class MlflowScoreModel(_MlflowBase):

@@ -42,3 +42,20 @@ def test_risk_comes_from_risk_model_not_score(monkeypatch):
     assert risk.predict_risk(ROW) is True
     risk._predict = lambda row: 0.0
     assert risk.predict_risk(ROW) is False
+
+
+def test_mlflow_models_get_float_columns():
+    """The registered models expect doubles; int64 input is refused by MLflow."""
+    import pandas as pd
+
+    seen = {}
+
+    class FakeModel:
+        def predict(self, frame):
+            seen["dtypes"] = set(frame.dtypes.astype(str))
+            return [5.0]
+
+    score = m.MlflowScoreModel.__new__(m.MlflowScoreModel)
+    score._pd, score._model = pd, FakeModel()
+    assert score.predict_score(ROW) == 5.0
+    assert seen["dtypes"] == {"float64"}
