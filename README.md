@@ -88,6 +88,8 @@ Each shortlisted model was tuned with **`RandomizedSearchCV`**, searching both m
 1. `pip install pandas scikit-learn matplotlib seaborn "kagglehub[pandas-datasets]"`
 2. Open the notebook and run all cells. Data downloads automatically from Kaggle.
 
+For the INSY 684 API metrics and local scrape setup, see [Prometheus monitoring](monitoring/README.md).
+
 ## Data
 StudentLife dataset: https://www.kaggle.com/datasets/dartweichen/student-life
 (survey files: PHQ-9, UCLA Loneliness, Flourishing, Perceived Stress, Big Five)

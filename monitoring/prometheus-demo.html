@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spark Check · Prometheus demo</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101719; color: #edf4f1; }
+    body { max-width: 66rem; margin: 0 auto; padding: clamp(1rem, 4vw, 3rem); }
+    h1 { font-size: clamp(2rem, 5vw, 3.5rem); margin: .35rem 0; letter-spacing: -.045em; }
+    h2 { font-size: 1.2rem; margin-top: 0; }
+    p { color: #afc3bf; line-height: 1.55; }
+    header { border-bottom: 1px solid #36504e; padding-bottom: 1.25rem; }
+    .tag { color: #8ce5c5; font-weight: 650; }
+    section { margin-top: 1.5rem; }
+    .buttons { display: flex; flex-wrap: wrap; gap: .65rem; }
+    button { font: inherit; font-weight: 650; cursor: pointer; border-radius: .5rem; padding: .65rem .9rem; color: inherit; background: #203032; border: 1px solid #4c6462; }
+    button:hover { background: #304547; }
+    button:focus-visible { outline: 2px solid #8ce5c5; outline-offset: 3px; }
+    .primary { background: #8ce5c5; color: #122623; }
+    .primary:hover { background: #b2f3db; }
+    dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem; }
+    dl div, pre { background: #192426; border: 1px solid #36504e; border-radius: .65rem; padding: 1rem; }
+    dt { color: #afc3bf; }
+    dd { font-size: 1.7rem; margin: .35rem 0 0; font-variant-numeric: tabular-nums; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+    code { color: #b1ebd5; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="tag">Spark Check · Synthetic traffic</span>
+    <h1>Prometheus monitoring demo</h1>
+    <p>Simulate requests to the prediction API, then scrape the mock exporter to see what Prometheus would collect. All HTTP responses and durations are generated in this page.</p>
+  </header>
+  <main>
+    <section aria-labelledby="traffic-title">
+      <h2 id="traffic-title">Simulate API traffic</h2>
+      <div class="buttons">
+        <button type="button" data-traffic="health">Health check · 200</button>
+        <button type="button" data-traffic="prediction">Prediction · 200</button>
+        <button type="button" data-traffic="invalid">Invalid input · 422</button>
+        <button type="button" data-traffic="error">Server error · 500</button>
+        <button type="button" id="burst">Send a mixed burst</button>
+      </div>
+      <p id="activity" role="status">No requests yet.</p>
+    </section>
+    <section aria-labelledby="scrape-title">
+      <h2 id="scrape-title">Prometheus scrape</h2>
+      <div class="buttons">
+        <button type="button" class="primary" id="scrape">Scrape and advance 5 seconds</button>
+        <button type="button" id="reset">Reset demo</button>
+      </div>
+      <p id="scrape-status" role="status"></p>
+      <dl>
+        <div><dt>Total requests</dt><dd id="total">0</dd></div>
+        <div><dt>Requests per second</dt><dd id="rate">—</dd></div>
+        <div><dt>p95 latency this interval</dt><dd id="latency">—</dd></div>
+        <div><dt>HTTP errors (4xx / 5xx)</dt><dd id="errors">0 / 0</dd></div>
+      </dl>
+      <p>The demo divides new requests by five seconds and calculates p95 from the individual mock durations. The live dashboards use PromQL rates and histogram buckets.</p>
+    </section>
+    <section aria-labelledby="metrics-title">
+      <h2 id="metrics-title">Mock <code>/metrics</code> excerpt</h2>
+      <pre id="metrics"></pre>
+    </section>
+  </main>
+  <script>
+    const scenarios = {
+      health: { endpoint: "/health", status: 200, minMs: 5, maxMs: 20 },
+      prediction: { endpoint: "/predict", status: 200, minMs: 30, maxMs: 140 },
+      invalid: { endpoint: "/predict", status: 422, minMs: 8, maxMs: 30 },
+      error: { endpoint: "/predict", status: 500, minMs: 90, maxMs: 350 }
+    };
+    const intervalSeconds = 5;
+    const requests = [];
+    let scrapedCount = 0;
+    let elapsedSeconds = 0;
+    const byId = id => document.getElementById(id);
+
+    function record(kind) {
+      const { endpoint, status, minMs, maxMs } = scenarios[kind];
+      const durationMs = Math.round(minMs + Math.random() * (maxMs - minMs));
+      requests.push({ endpoint, status, durationMs });
+      return `${endpoint} returned ${status} in ${durationMs} ms.`;
+    }
+
+    function renderScrape(interval) {
+      const snapshot = requests.slice(0, scrapedCount);
+      const durations = interval.map(request => request.durationMs).sort((a, b) => a - b);
+      const p95 = durations[Math.ceil(durations.length * 0.95) - 1];
+      const clientErrors = snapshot.filter(request => request.status >= 400 && request.status < 500);
+      const serverErrors = snapshot.filter(request => request.status >= 500);
+
+      byId("scrape-status").textContent = elapsedSeconds
+        ? `Scraped at t = ${elapsedSeconds}s. ${interval.length} new request(s).`
+        : "Waiting for the first scrape. Send some traffic to see the metrics change.";
+      byId("total").textContent = snapshot.length;
+      byId("rate").textContent = elapsedSeconds ? (interval.length / intervalSeconds).toFixed(2) : "—";
+      byId("latency").textContent = p95 === undefined ? "—" : `${p95} ms`;
+      byId("errors").textContent = `${clientErrors.length} / ${serverErrors.length}`;
+
+      const lines = [];
+      for (const { endpoint, status } of Object.values(scenarios)) {
+        const count = snapshot.filter(request => request.endpoint === endpoint && request.status === status).length;
+        if (count) lines.push(`api_requests_total{endpoint="${endpoint}",status="${status}"} ${count}`);
+      }
+      for (const endpoint of new Set(snapshot.map(request => request.endpoint))) {
+        const matched = snapshot.filter(request => request.endpoint === endpoint);
+        const seconds = matched.reduce((total, request) => total + request.durationMs, 0) / 1000;
+        lines.push(`api_request_seconds_count{endpoint="${endpoint}"} ${matched.length}`);
+        lines.push(`api_request_seconds_sum{endpoint="${endpoint}"} ${seconds.toFixed(3)}`);
+      }
+      byId("metrics").textContent = lines.join("\n") || "No samples collected.";
+    }
+
+    document.querySelectorAll("[data-traffic]").forEach(button => {
+      button.addEventListener("click", () => {
+        byId("activity").textContent = record(button.dataset.traffic);
+      });
+    });
+
+    byId("burst").addEventListener("click", () => {
+      const burst = ["health", "prediction", "prediction", "prediction", "invalid", "error"];
+      burst.forEach(record);
+      byId("activity").textContent = "Sent six requests: four successes, one 422, and one 500.";
+    });
+
+    byId("scrape").addEventListener("click", () => {
+      const interval = requests.slice(scrapedCount);
+      scrapedCount = requests.length;
+      elapsedSeconds += intervalSeconds;
+      renderScrape(interval);
+    });
+
+    byId("reset").addEventListener("click", () => {
+      requests.length = 0;
+      scrapedCount = 0;
+      elapsedSeconds = 0;
+      byId("activity").textContent = "No requests yet.";
+      renderScrape([]);
+    });
+
+    renderScrape([]);
+  </script>
+</body>
+</html>

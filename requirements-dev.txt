@@ -1,2 +1,10 @@
 pytest
 ruff
+pandas
+numpy
+scikit-learn
+mlflow
+prefect
+fastapi
+httpx
+prometheus-client
