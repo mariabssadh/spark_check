@@ -19,6 +19,49 @@ depressive symptoms by the end of term? Using the StudentLife dataset (Dartmouth
 predict end-of-term PHQ-9 scores (regression) and an at-risk flag, PHQ-9 ≥ 10 (classification),
 from start-of-term depression, loneliness, flourishing, stress, and neuroticism surveys.
 
+## Architecture
+
+Spark Check runs as a set of services that train the model, serve predictions through a web page, and monitor the model for drift, retraining it when new students start to look different from the training data. Every component except GitHub Actions runs as a container started with `docker compose up`.
+
+```mermaid
+lowchart TB
+    subgraph TRAIN["Training"]
+        DATA[("Cleaned survey data")]
+        FLOW["Prefect training flow"]
+        MLF["MLflow tracking + model registry"]
+        DATA --> FLOW
+        FLOW -- "log runs, register model" --> MLF
+    end
+
+    subgraph SERVE["Serving"]
+        USER(["Wellness staff"])
+        FE["Web page (Flask), port 5001"]
+        API["Model API (FastAPI), port 8000"]
+        SIM["Traffic simulator, with drift switch"]
+        USER --> FE
+        FE -- "POST /predict" --> API
+        SIM -- "POST /predict" --> API
+    end
+
+    subgraph MON["Monitoring"]
+        PG[("PostgreSQL: predictions + metrics")]
+        EV["Evidently: drift + performance"]
+        PROM["Prometheus"]
+        GRAF["Grafana: dashboards + alerts"]
+    end
+
+    MLF -- "load model" --> API
+    API -- "log each prediction" --> PG
+    PG -- "new vs training data" --> EV
+    EV -- "write metrics" --> PG
+    API -- "/metrics" --> PROM
+    PROM --> GRAF
+    PG --> GRAF
+    GRAF -. "drift alert: retrain" .-> FLOW
+
+    GHA["GitHub Actions: lint + tests on every PR"]
+```
+
 ## Key findings
 - **Regression:** Ridge Regression using only start-of-term PHQ-9 scores performed best, achieving a test RMSE of **2.711**, MAE of **2.051**, and R² of **0.739**. This represents a **49% reduction in RMSE** compared with the baseline mean predictor.
 - **Classification:** Logistic Regression correctly identified all 8 test students (1 at risk, 7 not at risk). However, a simple rule based on initial PHQ-9 scores achieved identical results.
