@@ -1,0 +1,4 @@
+evidently==0.7.23
+# Evidently 0.7.23 relies on a pandas 2 API.
+pandas==2.3.3
+psycopg[binary]==3.3.9
