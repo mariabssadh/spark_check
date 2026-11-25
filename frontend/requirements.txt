@@ -1,0 +1,21 @@
+# =====================================================================
+# requirements.txt
+#
+# This file holds the shopping list of tools the web page needs to work.
+# Since Python doesn't come with these, they need to be installed first
+# (by the Dockerfile, or by the user with python3 -m pip install -r requirements.txt).
+#
+# "==" pins the exact version, so every computer installs the same one.
+# =====================================================================
+
+# Makes web pages in Python
+flask==3.1.0
+
+# Sends the scores to the model API and gets the answer back
+requests==2.32.3
+
+# Runs the page properly inside Docker
+gunicorn==23.0.0
+
+# Runs the automatic tests in the tests folder
+pytest==8.3.4

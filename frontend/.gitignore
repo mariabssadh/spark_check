@@ -1,0 +1,3 @@
+# Files Python makes by itself when running the code, not part of the project
+__pycache__/
+.pytest_cache/

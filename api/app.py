@@ -24,12 +24,21 @@ LATENCY = Histogram("api_request_seconds", "Request time in seconds", ["endpoint
 
 @app.middleware("http")
 async def record_metrics(request: Request, call_next):
+    if request.url.path == "/metrics":
+        return await call_next(request)
+
     start = time.perf_counter()
-    response = await call_next(request)
-    endpoint = request.url.path
-    LATENCY.labels(endpoint).observe(time.perf_counter() - start)
-    REQUESTS.labels(endpoint, response.status_code).inc()
-    return response
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        # Routing happens inside call_next. Group unmatched URLs under one label.
+        route = request.scope.get("route")
+        endpoint = getattr(route, "path", "unmatched")
+        LATENCY.labels(endpoint).observe(time.perf_counter() - start)
+        REQUESTS.labels(endpoint, status).inc()
 
 
 @app.exception_handler(Exception)
