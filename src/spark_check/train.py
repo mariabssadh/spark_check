@@ -167,23 +167,46 @@ def train_and_log(name, model, feature_set, log_phq9, task, train, test, cv):
 
     return run.info.run_id, metrics
 
+def current_champion_score(client, model_name, main_metric):
+    """The main metric of the current champion, or None if there is no champion yet."""
+    try:
+        champion = client.get_model_version_by_alias(model_name, "champion")
+    except mlflow.exceptions.MlflowException:
+        return None  # first training run: nothing registered yet
+    return client.get_run(champion.run_id).data.metrics[main_metric]
+
 @task
 def register_best(results, main_metric, higher_is_better, model_name):
-    """Pick the best candidate (baselines excluded) and put it in the MLflow Model Registry.
+    """Pick the best candidate (baselines excluded) and register it in the MLflow Model Registry.
 
-    The new version gets the alias "champion", which is what the API loads.
+    It only becomes the "champion" (what the API loads) if it beats the current champion,
+    so a retraining run can never replace a better model with a worse one.
     """
     candidates = {name: r for name, r in results.items() if not name.startswith("baseline")}
     pick = max if higher_is_better else min
     best_name = pick(candidates, key=lambda name: candidates[name]["metrics"][main_metric])
     best = candidates[best_name]
+    new_score = best["metrics"][main_metric]
 
-    version = mlflow.register_model(f"runs:/{best['run_id']}/model", model_name)
     client = mlflow.MlflowClient()
-    client.set_registered_model_alias(model_name, "champion", version.version)
+    old_score = current_champion_score(client, model_name, main_metric)
+    if old_score is None:
+        is_better = True
+    else:
+        is_better = new_score > old_score if higher_is_better else new_score < old_score
+
+    # Register every new best model, so the registry keeps a history of all retraining runs
+    version = mlflow.register_model(f"runs:/{best['run_id']}/model", model_name)
     client.set_model_version_tag(model_name, version.version, "candidate", best_name)
 
-    print(f"  -> registered {best_name} as {model_name} v{version.version} (@champion)")
+    if is_better:
+        client.set_registered_model_alias(model_name, "champion", version.version)
+        print(f"  -> {best_name} ({new_score:.3f}) is the new champion: {model_name} v{version.version}")
+    else:
+        print(
+            f"  -> {best_name} ({new_score:.3f}) does not beat the current champion "
+            f"({old_score:.3f}); registered as v{version.version}, champion unchanged"
+        )
     return best_name
 
 
