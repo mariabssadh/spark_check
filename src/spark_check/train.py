@@ -167,45 +167,62 @@ def train_and_log(name, model, feature_set, log_phq9, task, train, test, cv):
 
     return run.info.run_id, metrics
 
-def current_champion_score(client, model_name, main_metric):
-    """The main metric of the current champion, or None if there is no champion yet."""
+
+def ranking(metrics, main_metric, tiebreak_metric, higher_is_better):
+    """Score used to rank models: the main metric first, the tie-break metric second.
+
+    Flipped for "lower is better" metrics, so that a higher ranking always means a better model.
+    """
+    sign = 1 if higher_is_better else -1
+    return (sign * round(metrics[main_metric], 6), sign * round(metrics[tiebreak_metric], 6))
+
+
+def current_champion_metrics(client, model_name):
+    """The metrics of the current champion, or None if there is no champion yet."""
     try:
         champion = client.get_model_version_by_alias(model_name, "champion")
     except mlflow.exceptions.MlflowException:
         return None  # first training run: nothing registered yet
-    return client.get_run(champion.run_id).data.metrics[main_metric]
+    return client.get_run(champion.run_id).data.metrics
+
 
 @task
-def register_best(results, main_metric, higher_is_better, model_name):
+def register_best(results, main_metric, tiebreak_metric, higher_is_better, model_name):
     """Pick the best candidate (baselines excluded) and register it in the MLflow Model Registry.
 
-    It only becomes the "champion" (what the API loads) if it beats the current champion,
-    so a retraining run can never replace a better model with a worse one.
+    Models are ranked on the main metric; ties are broken on a second metric (e.g. precision
+    for the risk model, so a model that flags everyone can't win on recall alone).
+    The new model only becomes the "champion" (what the API loads) if it beats the current
+    champion, so a retraining run can never replace a better model with a worse one.
     """
+    def rank(metrics):
+        return ranking(metrics, main_metric, tiebreak_metric, higher_is_better)
+
     candidates = {name: r for name, r in results.items() if not name.startswith("baseline")}
-    pick = max if higher_is_better else min
-    best_name = pick(candidates, key=lambda name: candidates[name]["metrics"][main_metric])
+    best_name = max(candidates, key=lambda name: rank(candidates[name]["metrics"]))
     best = candidates[best_name]
-    new_score = best["metrics"][main_metric]
+    new_metrics = best["metrics"]
 
     client = mlflow.MlflowClient()
-    old_score = current_champion_score(client, model_name, main_metric)
-    if old_score is None:
-        is_better = True
-    else:
-        is_better = new_score > old_score if higher_is_better else new_score < old_score
+    old_metrics = current_champion_metrics(client, model_name)
+    is_better = old_metrics is None or rank(new_metrics) > rank(old_metrics)
 
     # Register every new best model, so the registry keeps a history of all retraining runs
     version = mlflow.register_model(f"runs:/{best['run_id']}/model", model_name)
     client.set_model_version_tag(model_name, version.version, "candidate", best_name)
 
+    summary = (
+        f"{best_name} ({main_metric} {new_metrics[main_metric]:.3f}, "
+        f"{tiebreak_metric} {new_metrics[tiebreak_metric]:.3f})"
+    )
     if is_better:
         client.set_registered_model_alias(model_name, "champion", version.version)
-        print(f"  -> {best_name} ({new_score:.3f}) is the new champion: {model_name} v{version.version}")
+        print(f"  -> {summary} is the new champion: {model_name} v{version.version}")
     else:
         print(
-            f"  -> {best_name} ({new_score:.3f}) does not beat the current champion "
-            f"({old_score:.3f}); registered as v{version.version}, champion unchanged"
+            f"  -> {summary} does not beat the current champion "
+            f"({old_metrics[main_metric]:.3f}, {old_metrics[tiebreak_metric]:.3f}); "
+            f"registered as v{version.version}, champion unchanged"
         )
     return best_name
 
@@ -222,10 +239,10 @@ def training_flow():
     cv = make_cv_splits(train)
 
     champions = {}
-    # (task, candidates, metric to compare on, is higher better?)
-    for task_name, candidates, main_metric, higher_is_better in [
-        ("score", SCORE_CANDIDATES, "cv_rmse_mean", False),
-        ("risk", RISK_CANDIDATES, "cv_recall_mean", True),
+    # (task, candidates, main metric, tie-break metric, is higher better?)
+    for task_name, candidates, main_metric, tiebreak_metric, higher_is_better in [
+        ("score", SCORE_CANDIDATES, "cv_rmse_mean", "cv_mae_mean", False),
+        ("risk", RISK_CANDIDATES, "cv_recall_mean", "cv_precision_mean", True),
     ]:
         mlflow.set_experiment(f"spark-check-{task_name}")
         print(f"{task_name.upper()} models ({main_metric}):")
@@ -235,7 +252,9 @@ def training_flow():
             results[name] = {"run_id": run_id, "metrics": metrics}
             print(f"  {name:20s} {metrics[main_metric]:.3f}")
 
-        champions[task_name] = register_best(results, main_metric, higher_is_better, f"spark-check-{task_name}")
+        champions[task_name] = register_best(
+            results, main_metric, tiebreak_metric, higher_is_better, f"spark-check-{task_name}"
+        )
 
     return champions
 

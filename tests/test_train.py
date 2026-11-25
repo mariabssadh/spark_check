@@ -16,7 +16,7 @@ from spark_check.data import (
     load_processed,
     split_train_test,
 )
-from spark_check.train import RISK_CANDIDATES, SCORE_CANDIDATES, build_pipeline
+from spark_check.train import RISK_CANDIDATES, SCORE_CANDIDATES, build_pipeline, ranking
 
 
 def get_candidate(candidates, name):
@@ -84,8 +84,25 @@ def test_predictions_are_sensible(data):
     assert set(risk_model.predict(students)) <= {0, 1}
 
 
+def test_ranking_breaks_recall_ties_on_precision():
+    """Champion selection: with equal recall, the model with better precision ranks higher,
+    so a model that flags everyone can't win on recall alone. Works for lower-is-better too."""
+    flags_everyone = {"cv_recall_mean": 1.0, "cv_precision_mean": 0.2}
+    selective = {"cv_recall_mean": 1.0, "cv_precision_mean": 0.6}
+    assert ranking(selective, "cv_recall_mean", "cv_precision_mean", True) > ranking(
+        flags_everyone, "cv_recall_mean", "cv_precision_mean", True
+    )
+
+    low_error = {"cv_rmse_mean": 4.0, "cv_mae_mean": 3.0}
+    high_error = {"cv_rmse_mean": 4.5, "cv_mae_mean": 2.0}
+    assert ranking(low_error, "cv_rmse_mean", "cv_mae_mean", False) > ranking(
+        high_error, "cv_rmse_mean", "cv_mae_mean", False
+    )
+
+
 def test_training_flow_registers_champions(tmp_path, monkeypatch):
-    """Integration: the full Prefect flow runs and registers a champion for both models."""
+    """Integration: the full Prefect flow registers a champion for both models, and
+    retraining only replaces the champion if the new model is better."""
     import mlflow
     from prefect.testing.utilities import prefect_test_harness
 
@@ -97,8 +114,12 @@ def test_training_flow_registers_champions(tmp_path, monkeypatch):
 
     with prefect_test_harness():
         champions = training_flow()
+        training_flow()  # retrain with the same data: same scores, so not better
 
     assert champions == {"score": "ridge_A", "risk": "logreg_C"}
     client = mlflow.MlflowClient(tracking_uri=tracking_uri)
     for model_name in ["spark-check-score", "spark-check-risk"]:
-        assert client.get_model_version_by_alias(model_name, "champion") is not None
+        versions = client.search_model_versions(f"name='{model_name}'")
+        assert len(versions) == 2  # both runs are kept in the registry
+        champion = client.get_model_version_by_alias(model_name, "champion")
+        assert int(champion.version) == 1  # the second run did not replace the champion
