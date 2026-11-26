@@ -1,0 +1,24 @@
+apiVersion: 1
+
+datasources:
+  - name: Spark Check Prometheus
+    type: prometheus
+    uid: spark-check-prometheus
+    access: proxy
+    url: $MONITORING_PROMETHEUS_URL
+    jsonData:
+      timeInterval: 5s
+
+  - name: Spark Check PostgreSQL
+    type: postgres
+    uid: spark-check-postgres
+    access: proxy
+    url: $MONITORING_POSTGRES_HOST
+    user: $MONITORING_POSTGRES_USER
+    secureJsonData:
+      password: $MONITORING_POSTGRES_PASSWORD
+    jsonData:
+      database: $MONITORING_POSTGRES_DATABASE
+      sslmode: $MONITORING_POSTGRES_SSLMODE
+      postgresVersion: 1600
+      timescaledb: false
