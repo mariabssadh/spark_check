@@ -1,0 +1,276 @@
+{#
+=====================================================================
+templates/index.html
+
+ROLE OF THIS FILE: what the person sees.
+It mixes 4 languages:
+  HTML       -> the content (title, boxes, button)
+  CSS        -> the look (colours, sizes, spacing), inside <style>
+  Jinja      -> blanks that app.py fills in:
+                  {{ something }}                 = "put this value here"
+                  {% if ... %} / {% for ... %}    = "show this only if..." / "repeat this for each..."
+  JavaScript -> small touches that make the page smoother, inside <script>
+Notes like this one (starting with a curly bracket and # sign) are for us only:
+they never appear on the web page.
+
+This is a TEMPLATE: opening it straight from your folder shows a messy
+page full of blanks. Run "python3 app.py" and open localhost:5000 to see
+the real page.
+=====================================================================
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  {# STEP 1: Page setup (behind the scenes, not shown on the page) #}
+  {# utf-8 -> can show any character like "–"; viewport -> fits phone screens; title -> browser tab name #}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spark Check</title>
+
+  {# STEP 2: The look (CSS). Each rule says "things of this kind look like this". #}
+  <style>
+    /* 2a. The colour palette, defined once and reused everywhere.
+           Soft sage greens and blues for a calm feel. */
+    :root {
+      --bg-top: #eef4f1;
+      --bg-bottom: #eaf0f6;
+      --card: #ffffff;
+      --ink: #1f2d2b;
+      --muted: #5f6f6c;
+      --line: #dbe4e1;
+      --accent: #2b6e44;
+      --accent-dark: #1f5132;
+      --accent-soft: #e1ede5;
+      --calm: #e6f3ea;
+      --calm-ink: #1e5b34;
+      --warm: #fdf0dc;
+      --warm-ink: #8a4b0f;
+      --error: #b3261e;
+      --radius: 16px;
+    }
+
+    /* 2b. The whole page: system font, soft gradient background */
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    main { max-width: 680px; margin: 0 auto; padding: 48px 20px 64px; }
+
+    /* 2c. Header: round logo, title, short explanation */
+    .header { display: flex; align-items: center; gap: 14px; }
+    .logo {
+      width: 44px; height: 44px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      display: grid; place-items: center; font-size: 22px; flex: none;
+    }
+    h1 { margin: 0; font-size: 28px; letter-spacing: -0.3px; }
+    .intro { color: var(--muted); margin: 10px 0 0; font-size: 16px; }
+
+    /* 2d. Test-mode pill */
+    .test-mode {
+      display: inline-block; margin-top: 16px; padding: 6px 12px;
+      background: #fff7e0; color: #7a5b00; border-radius: 999px; font-size: 13px;
+    }
+
+    /* 2e. White cards with soft shadows (form, result, note) */
+    .card {
+      background: var(--card); border-radius: var(--radius); padding: 28px;
+      margin-top: 24px; box-shadow: 0 1px 2px rgba(31,45,43,.04), 0 8px 24px rgba(31,45,43,.06);
+    }
+    .card h2 { margin: 0 0 4px; font-size: 18px; }
+    .card .sub { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
+
+    /* 2f. The 5 boxes in two columns (one column on phones) */
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 20px; }
+    .field:last-child:nth-child(odd) { grid-column: 1 / -1; }
+    @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+
+    /* 2g. Labels and the grey range hint */
+    label { display: block; font-weight: 600; font-size: 14px; }
+    .range { display: block; font-weight: 400; color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+    /* 2h. Typing boxes: soft border, glowing outline when selected, red when wrong */
+    input {
+      width: 100%; margin-top: 8px; padding: 12px 14px; font-size: 16px;
+      border: 1.5px solid var(--line); border-radius: 12px; background: #fbfdfc; color: var(--ink);
+      transition: border-color .2s, box-shadow .2s, background .2s;
+    }
+    input:hover { border-color: #c3d3cf; }
+    input:focus { outline: none; border-color: var(--accent); background: #fff;
+                  box-shadow: 0 0 0 4px var(--accent-soft); }
+    input.bad { border-color: var(--error); box-shadow: 0 0 0 4px #fbe9e7; }
+    .error { color: var(--error); font-size: 13px; margin-top: 6px; min-height: 0; }
+
+    /* 2i. The Predict button: full width, darker on hover, shows "Predicting..." while waiting */
+    button {
+      width: 100%; margin-top: 26px; padding: 14px; font-size: 16px; font-weight: 600;
+      color: #fff; background: var(--accent); border: none; border-radius: 12px; cursor: pointer;
+      transition: background .2s, transform .1s;
+    }
+    button:hover { background: var(--accent-dark); }
+    button:active { transform: scale(.99); }
+    button:disabled { opacity: .7; cursor: wait; }
+
+    /* 2j. Message when the API can't be reached */
+    .api-error { background: #fdecea; color: var(--error); border-radius: 12px; padding: 14px 16px; margin-top: 24px; }
+
+    /* 2k. The result card fades in gently */
+    .result { animation: fadeUp .45s ease-out both; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .result-label { color: var(--muted); font-size: 14px; margin: 0; }
+    .score { font-size: 48px; font-weight: 700; letter-spacing: -1px; margin: 2px 0 18px; }
+    .score span { font-size: 20px; font-weight: 500; color: var(--muted); }
+
+    /* 2l. The score bar: 0 to 27, with the at-risk line at 10 and a dot for this student */
+    .bar { position: relative; height: 10px; border-radius: 999px;
+           background: linear-gradient(90deg, #cfe9d9 0%, #cfe9d9 37%, #f6dcb6 37%, #f3c99a 100%); }
+    .cutoff { position: absolute; left: 37%; top: -6px; bottom: -6px; width: 2px; background: var(--ink); opacity: .35; }
+    .dot { position: absolute; top: 50%; width: 20px; height: 20px; margin-left: -10px; margin-top: -10px;
+           border-radius: 50%; background: #fff; border: 4px solid var(--accent); box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+    .scale { position: relative; display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .scale .mid { position: absolute; left: 37%; transform: translateX(-50%); white-space: nowrap; }
+
+    /* 2m. The at-risk message: calm green or warm amber */
+    .flag { margin-top: 20px; padding: 14px 16px; border-radius: 12px; font-weight: 600; }
+    .flag small { display: block; font-weight: 400; margin-top: 2px; }
+    .flag.ok { background: var(--calm); color: var(--calm-ink); }
+    .flag.risk { background: var(--warm); color: var(--warm-ink); }
+
+    /* 2n. The note at the bottom */
+    .note { font-size: 14px; color: var(--muted); }
+    .note strong { color: var(--ink); }
+    .note p { margin: 0 0 8px; }
+    .note p:last-child { margin: 0; }
+
+    /* 2o. People who turn off animations in their settings get none */
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+<main>
+  {# STEP 3: Header: logo, title and short explanation #}
+  <div class="header">
+    <div class="logo" aria-hidden="true">✦</div>
+    <h1>Spark Check</h1>
+  </div>
+  <p class="intro">Enter a student's start-of-term survey scores to see how they may be doing by the end of term.</p>
+
+  {# STEP 4: Small pill, shown only in test mode (when app.py has no API address) #}
+  {% if test_mode %}
+    <span class="test-mode">Test mode · results are a pretend answer until the model is connected</span>
+  {% endif %}
+
+  {# STEP 5: The form #}
+  {# method="post" -> clicking the button sends the scores to app.py (the POST in Step 7 of app.py) #}
+  {# novalidate    -> skip the browser's own pop-ups, so OUR friendly error messages show instead #}
+  <form method="post" class="card" id="score-form" novalidate>
+    <h2>Survey scores</h2>
+    <p class="sub">All five are needed. Use the student's totals from the start of term.</p>
+
+    <div class="grid">
+      {# 5a. Repeat for each of the 5 scores in FIELDS (app.py, Step 4): one piece of code draws 5 boxes #}
+      {% for name, label, low, high in fields %}
+        <div class="field">
+          {# 5b. The label and its allowed range #}
+          <label for="{{ name }}">{{ label }}
+            <span class="range">Range {{ low }}–{{ high }}</span>
+          </label>
+
+          {# 5c. The typing box:
+                 name          -> how app.py finds it (e.g. phq9_pre)
+                 min / max     -> the allowed range (also read by the instant check in Step 9)
+                 inputmode     -> shows a number keypad on phones
+                 value         -> puts back what was typed before
+                 class "bad"   -> red border if app.py found an error in this box #}
+          <input type="number" id="{{ name }}" name="{{ name }}" min="{{ low }}" max="{{ high }}" step="1"
+                 inputmode="numeric" placeholder="{{ low }}–{{ high }}"
+                 value="{{ values.get(name, '') }}" class="{{ 'bad' if name in errors else '' }}"
+                 aria-describedby="{{ name }}-error">
+
+          {# 5d. The red message for this box (filled by app.py, or instantly by Step 9) #}
+          <div class="error" id="{{ name }}-error" role="alert">{{ errors.get(name, '') }}</div>
+        </div>
+      {% endfor %}
+    </div>
+
+    {# 5e. The button that sends the form #}
+    <button type="submit" id="predict-btn">Predict</button>
+  </form>
+
+  {# STEP 6: Shown only if the API couldn't be reached #}
+  {% if api_error %}
+    <div class="api-error">{{ api_error }}</div>
+  {% endif %}
+
+  {# STEP 7: The result, shown only after a successful prediction #}
+  {% if result %}
+    {# 7a. Round the score, and keep the dot inside the bar (between 0 and 27) #}
+    {% set score = result.predicted_phq9_post | round | int %}
+    {% set position = ([[score, 0] | max, 27] | min) / 27 * 100 %}
+
+    <div class="card result" id="result">
+      <p class="result-label">Predicted end-of-term score</p>
+      <p class="score">{{ score }} <span>out of 27</span></p>
+
+      {# 7b. The score bar: green below 10, amber from 10, the dot shows this student #}
+      <div class="bar" aria-hidden="true">
+        <div class="cutoff"></div>
+        <div class="dot" style="left: {{ position | round(1) }}%"></div>
+      </div>
+      <div class="scale" aria-hidden="true"><span>0</span><span class="mid">10 · at-risk line</span><span>27</span></div>
+
+      {# 7c. Turn true/false into plain words: amber if at risk, green if not #}
+      {% if result.at_risk %}
+        <div class="flag risk">This student may need a check-in.
+          <small>Their predicted score is at or above the at-risk line of 10.</small></div>
+      {% else %}
+        <div class="flag ok">This student is not flagged as at risk.
+          <small>Their predicted score is below the at-risk line of 10.</small></div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {# STEP 8: Always shown: the screening-aid warning and support numbers #}
+  <div class="card note">
+    <p><strong>This is a screening aid, not a diagnosis.</strong> All decisions stay with trained staff.</p>
+    <p>If you or someone you know is struggling: McGill Student Wellness Hub, 514-398-6017 ·
+       Suicide Crisis Helpline, call or text 9-8-8 (24/7) · In an emergency, call 911.</p>
+  </div>
+</main>
+
+{# STEP 9: Small touches that make the page smoother (JavaScript).
+          app.py still checks everything; these only give faster feedback. #}
+<script>
+  // 9a. Instant check: when you leave a box, show the error right away
+  //     (instead of waiting for the Predict button), and clear it once fixed.
+  document.querySelectorAll("#score-form input").forEach(function (box) {
+    var message = document.getElementById(box.id + "-error");
+    function check() {
+      var low = Number(box.min), high = Number(box.max), text = box.value.trim();
+      var ok = text !== "" && Number.isInteger(Number(text)) && Number(text) >= low && Number(text) <= high;
+      box.classList.toggle("bad", !ok && text !== "");
+      message.textContent = (!ok && text !== "") ? "Please enter a whole number from " + low + " to " + high + "." : "";
+    }
+    box.addEventListener("blur", check);
+    box.addEventListener("input", function () { if (box.classList.contains("bad")) { check(); } });
+  });
+
+  // 9b. While waiting for the answer, change the button to "Predicting..."
+  //     so people don't click twice.
+  document.getElementById("score-form").addEventListener("submit", function () {
+    var button = document.getElementById("predict-btn");
+    button.disabled = true;
+    button.textContent = "Predicting…";
+  });
+
+  // 9c. After a prediction, scroll gently down to the result.
+  var result = document.getElementById("result");
+  if (result) { result.scrollIntoView({ behavior: "smooth", block: "center" }); }
+</script>
+</body>
+</html>
