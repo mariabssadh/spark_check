@@ -16,11 +16,20 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install tools
-        run: pip install -r requirements-dev.txt
+      - name: Install tools and service libraries
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -r api/requirements.txt
+          if [ -f frontend/requirements.txt ]; then pip install -r frontend/requirements.txt; fi
 
       - name: Check code style
         run: ruff check .
 
       - name: Run tests
         run: pytest
+
+      - name: Run frontend tests
+        run: |
+          if [ -d frontend/tests ]; then
+            cd frontend && python -m pytest tests
+          fi   
