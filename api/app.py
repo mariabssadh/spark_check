@@ -12,11 +12,12 @@ from prometheus_client import (
 )
 
 from api.db import save_prediction
-from api.model import AT_RISK_CUTOFF, load_model
+from api.model import combined_version, load_models
 from api.schemas import Prediction, StudentScores
 
 app = FastAPI(title="Spark Check API")
-model = load_model()
+score_model, risk_model = load_models()
+MODEL_VERSION = combined_version(score_model, risk_model)
 
 REQUESTS = Counter("api_requests_total", "Requests", ["endpoint", "status"])
 LATENCY = Histogram("api_request_seconds", "Request time in seconds", ["endpoint"])
@@ -48,17 +49,22 @@ async def unexpected_error(request: Request, exc: Exception):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_version": model.version}
+    return {
+        "status": "ok",
+        "model_version": MODEL_VERSION,
+        "score_model": score_model.version,
+        "risk_model": risk_model.version,
+    }
 
 
 @app.post("/predict", response_model=Prediction)
 def predict(scores: StudentScores):
     row = scores.model_dump()
-    score = round(model.predict_score(row), 2)
-    at_risk = score >= AT_RISK_CUTOFF
-    save_prediction(row, score, at_risk, model.version)
+    score = round(score_model.predict_score(row), 2)  # score model -> PHQ-9 estimate
+    at_risk = bool(risk_model.predict_risk(row))  # risk model -> at-risk flag
+    save_prediction(row, score, at_risk, MODEL_VERSION)
     return Prediction(
-        predicted_phq9_post=score, at_risk=at_risk, model_version=model.version
+        predicted_phq9_post=score, at_risk=at_risk, model_version=MODEL_VERSION
     )
 
 

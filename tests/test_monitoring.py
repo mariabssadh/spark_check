@@ -24,7 +24,7 @@ def test_request_metrics(monkeypatch):
     def fail(row):
         raise RuntimeError("test failure")
 
-    monkeypatch.setattr(api.model, "predict_score", fail)
+    monkeypatch.setattr(api.score_model, "predict_score", fail)
     client = TestClient(api.app, raise_server_exceptions=False)
     before = scrape(client)
     assert client.get("/health").status_code == 200
