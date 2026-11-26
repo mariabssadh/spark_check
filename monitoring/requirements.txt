@@ -2,3 +2,6 @@ evidently==0.7.23
 # Evidently 0.7.23 relies on a pandas 2 API.
 pandas==2.3.3
 psycopg[binary]==3.3.9
+fastapi==0.150.0
+prefect==3.9.5
+uvicorn==0.54.0
