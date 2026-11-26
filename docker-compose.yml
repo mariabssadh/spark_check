@@ -1,0 +1,161 @@
+services:
+  # ---------- Storage ----------
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+
+  # ---------- Training ----------
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.18.0
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --artifacts-destination /mlflow/artifacts
+      --serve-artifacts
+      --allowed-hosts "mlflow:5000,localhost:5050,127.0.0.1:5050"
+    ports:
+      - "5050:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      retries: 10
+
+  prefect:
+    image: prefecthq/prefect:3-latest
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "4200:4200"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      interval: 10s
+      retries: 10
+
+  training:
+    build:
+      context: .
+      dockerfile: training/Dockerfile
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PREFECT_API_URL: http://prefect:4200/api
+    depends_on:
+      mlflow:
+        condition: service_healthy
+      prefect:
+        condition: service_healthy
+    restart: on-failure
+
+  # ---------- Serving ----------
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      SCORE_MODEL_URI: models:/spark-check-score@champion
+      RISK_MODEL_URI: models:/spark-check-risk@champion
+    depends_on:
+      db:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    restart: on-failure
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5001:5000"
+    environment:
+      API_URL: http://api:8000/predict
+    depends_on:
+      - api
+
+  simulator:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      API_URL: http://api:8000
+      DRIFT: "0"
+    depends_on:
+      - api
+    restart: on-failure
+
+  # ---------- Monitoring ----------
+  prometheus:
+    image: prom/prometheus:latest
+    command: --config.file=/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.docker.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - api
+
+  evidently:
+    build:
+      context: .
+      dockerfile: monitoring/Dockerfile
+    command: sh -c "python -m monitoring.evaluate --init-db && python -m monitoring.evaluate --watch"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      MONITORING_MODEL_VERSION: models:/spark-check-score@champion
+      MONITORING_REFERENCE_CSV: /app/reference/students.csv
+      MONITORING_REFERENCE_ID: students-v1
+    volumes:
+      - ./data/processed/students.csv:/app/reference/students.csv:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  monitoring-alerts:
+    build:
+      context: .
+      dockerfile: monitoring/Dockerfile
+    command: python -m uvicorn monitoring.alerts:app --host 0.0.0.0 --port 8010
+    environment:
+      PREFECT_API_URL: http://prefect:4200/api
+      MONITORING_ALERT_PASSWORD: ${MONITORING_ALERT_PASSWORD}
+    depends_on:
+      prefect:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      MONITORING_PROMETHEUS_URL: http://prometheus:9090
+      MONITORING_POSTGRES_HOST: db:5432
+      MONITORING_POSTGRES_DATABASE: ${POSTGRES_DB}
+      MONITORING_POSTGRES_USER: ${POSTGRES_USER}
+      MONITORING_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MONITORING_POSTGRES_SSLMODE: disable
+      MONITORING_DASHBOARDS_PATH: /var/lib/grafana/dashboards
+      MONITORING_RETRAIN_WEBHOOK_URL: http://monitoring-alerts:8010/alerts/drift
+      MONITORING_ALERT_PASSWORD: ${MONITORING_ALERT_PASSWORD}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - db
+
+volumes:
+  pgdata:
+  mlflow-data:
