@@ -5,7 +5,7 @@ McGill INSY 674 — Group Project (Fall 2026)
 ## Group 1
 | Name | GitHub |
 |---|---|
-| Maria Bssadh | @mariabssadh1-droid |
+| Maria Bssadh | @mariabssadh |
 | Diana Oliván | @dianaolig8 |
 | Prethela Parvin Zolok | @prethela-parvin |
 | Surya Jade Edakunni | @SuryaJadeEdakunni |
