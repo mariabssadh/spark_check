@@ -26,11 +26,14 @@ Spark Check runs as a set of services that train the model, serve predictions th
 ```mermaid
 flowchart TB
     subgraph TRAIN["Training"]
-        DATA[("Cleaned survey data")]
-        FLOW["Prefect training flow"]
-        MLF["MLflow tracking + model registry"]
-        DATA --> FLOW
-        FLOW -- "log runs, register model" --> MLF
+        RAW[("Raw StudentLife surveys")]
+        CLEAN["Data cleaning: data/processed/students.csv"]
+        PREF["Prefect server"]
+        FLOW["Training flow (retrain deployment)"]
+        MLF["MLflow server: tracking + model registry"]
+        RAW --> CLEAN --> FLOW
+        PREF -- "runs" --> FLOW
+        FLOW -- "register score + risk models" --> MLF
     end
 
     subgraph SERVE["Serving"]
@@ -48,16 +51,18 @@ flowchart TB
         EV["Evidently: drift + performance"]
         PROM["Prometheus"]
         GRAF["Grafana: dashboards + alerts"]
+        ALERT["Alert service (monitoring-alerts)"]
     end
 
-    MLF -- "load model" --> API
+    MLF -- "load score + risk models" --> API
     API -- "log each prediction" --> PG
     PG -- "new vs training data" --> EV
     EV -- "write metrics" --> PG
     API -- "/metrics" --> PROM
     PROM --> GRAF
     PG --> GRAF
-    GRAF -. "drift alert: retrain" .-> FLOW
+    GRAF -- "drift alert" --> ALERT
+    ALERT -. "start retrain deployment" .-> PREF
 
     GHA["GitHub Actions: lint + tests on every PR"]
 ```
@@ -156,7 +161,24 @@ docker compose run --rm -e DRIFT=0 simulator   # normal term
 docker compose run --rm -e DRIFT=1 simulator   # exam-season drift
 ```
 
-Stop everything: `docker compose down`
+Stop everything (keeps the database, trained models and MLflow runs):
+
+```bash
+docker compose down
+```
+
+Full reset (also deletes all saved data and models):
+
+```bash
+docker compose down -v
+```
+To rerun last term's analysis notebook (`INSY 674-Group Project.ipynb`):
+
+```bash
+pip install pandas scikit-learn matplotlib seaborn "kagglehub[pandas-datasets]"
+```
+
+Then open the notebook and run all cells; it downloads the raw StudentLife data from Kaggle.
 
 ## Monitoring
 
