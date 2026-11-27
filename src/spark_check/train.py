@@ -285,7 +285,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # Always train once first, so the registry has champion models when the stack starts
+    training_flow()
     if args.serve:
         training_flow.serve(name="retrain")
-    else:
-        training_flow()
