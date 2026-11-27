@@ -26,11 +26,14 @@ Spark Check runs as a set of services that train the model, serve predictions th
 ```mermaid
 flowchart TB
     subgraph TRAIN["Training"]
-        DATA[("Cleaned survey data")]
-        FLOW["Prefect training flow"]
-        MLF["MLflow tracking + model registry"]
-        DATA --> FLOW
-        FLOW -- "log runs, register model" --> MLF
+        RAW[("Raw StudentLife surveys")]
+        CLEAN["Data cleaning: data/processed/students.csv"]
+        PREF["Prefect server"]
+        FLOW["Training flow (retrain deployment)"]
+        MLF["MLflow server: tracking + model registry"]
+        RAW --> CLEAN --> FLOW
+        PREF -- "runs" --> FLOW
+        FLOW -- "register score + risk models" --> MLF
     end
 
     subgraph SERVE["Serving"]
@@ -48,16 +51,18 @@ flowchart TB
         EV["Evidently: drift + performance"]
         PROM["Prometheus"]
         GRAF["Grafana: dashboards + alerts"]
+        ALERT["Alert service (monitoring-alerts)"]
     end
 
-    MLF -- "load model" --> API
+    MLF -- "load score + risk models" --> API
     API -- "log each prediction" --> PG
     PG -- "new vs training data" --> EV
     EV -- "write metrics" --> PG
     API -- "/metrics" --> PROM
     PROM --> GRAF
     PG --> GRAF
-    GRAF -. "drift alert: retrain" .-> FLOW
+    GRAF -- "drift alert" --> ALERT
+    ALERT -. "start retrain deployment" .-> PREF
 
     GHA["GitHub Actions: lint + tests on every PR"]
 ```
@@ -127,9 +132,75 @@ Each shortlisted model was tuned with **`RandomizedSearchCV`**, searching both m
   1. Frame the Problem · 2. Get the Data · 3. Explore the Data · 4. Prepare the Data 
   5. Measure and Compare Performance · 6. Fine-Tune the System
 
-## How to Run
-1. `pip install pandas scikit-learn matplotlib seaborn "kagglehub[pandas-datasets]"`
-2. Open the notebook and run all cells. Data downloads automatically from Kaggle.
+## How to run
+
+Requires Docker Desktop and Git. No other accounts needed.
+
+```bash
+git clone https://github.com/mariabssadh/spark_check.git
+cd spark_check
+cp .env.example .env        # then set your own passwords in .env
+docker compose up --build -d
+```
+
+The first build takes about 10 minutes. The training service trains the models once and registers them in MLflow; the API then starts automatically.
+
+| Page | Address |
+|---|---|
+| Web page (enter 5 scores, get a prediction) | http://localhost:5001 |
+| Model API docs | http://localhost:8000/docs |
+| MLflow (experiments and model registry) | http://localhost:5050 |
+| Prefect (training and retraining flows) | http://localhost:4200 |
+| Prometheus (API metrics) | http://localhost:9090 |
+| Grafana (dashboards and drift alerts; user `admin`) | http://localhost:3000 |
+
+Send simulated students:
+
+```bash
+docker compose run --rm -e DRIFT=0 simulator   # normal term
+docker compose run --rm -e DRIFT=1 simulator   # exam-season drift
+```
+
+Stop everything (keeps the database, trained models and MLflow runs):
+
+```bash
+docker compose down
+```
+
+Full reset (also deletes all saved data and models):
+
+```bash
+docker compose down -v
+```
+To rerun last term's analysis notebook (`INSY 674-Group Project.ipynb`):
+
+```bash
+pip install pandas scikit-learn matplotlib seaborn "kagglehub[pandas-datasets]"
+```
+
+Then open the notebook and run all cells; it downloads the raw StudentLife data from Kaggle.
+
+## Monitoring
+
+Prometheus collects the API's request count, latency and errors:
+
+![API panels in Grafana](docs/screenshots/grafana-overview.png)
+
+Evidently compares each 5-minute window of new students with the training data. With exam-season drift, 80% of the inputs drift (in our test, 143 of 200 students were flagged at risk, versus 51 in normal mode):
+
+![Drift share after exam-season drift](docs/screenshots/grafana-drift.png)
+
+The Grafana drift alert fires:
+
+![Drift alert firing](docs/screenshots/alert-firing.png)
+
+and triggers the Prefect retraining flow automatically:
+
+![Prefect retraining runs](docs/screenshots/prefect-retrain.png)
+
+After normal traffic returns, the alert recovers:
+
+![Drift alert back to normal](docs/screenshots/alert-normal.png)
 
 For the INSY 684 monitoring setup and integration steps, see the [monitoring runbook](monitoring/README.md).
 
