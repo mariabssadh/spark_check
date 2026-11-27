@@ -127,9 +127,58 @@ Each shortlisted model was tuned with **`RandomizedSearchCV`**, searching both m
   1. Frame the Problem · 2. Get the Data · 3. Explore the Data · 4. Prepare the Data 
   5. Measure and Compare Performance · 6. Fine-Tune the System
 
-## How to Run
-1. `pip install pandas scikit-learn matplotlib seaborn "kagglehub[pandas-datasets]"`
-2. Open the notebook and run all cells. Data downloads automatically from Kaggle.
+## How to run
+
+Requires Docker Desktop and Git. No other accounts needed.
+
+```bash
+git clone https://github.com/mariabssadh/spark_check.git
+cd spark_check
+cp .env.example .env        # then set your own passwords in .env
+docker compose up --build -d
+```
+
+The first build takes about 10 minutes. The training service trains the models once and registers them in MLflow; the API then starts automatically.
+
+| Page | Address |
+|---|---|
+| Web page (enter 5 scores, get a prediction) | http://localhost:5001 |
+| Model API docs | http://localhost:8000/docs |
+| MLflow (experiments and model registry) | http://localhost:5050 |
+| Prefect (training and retraining flows) | http://localhost:4200 |
+| Prometheus (API metrics) | http://localhost:9090 |
+| Grafana (dashboards and drift alerts; user `admin`) | http://localhost:3000 |
+
+Send simulated students:
+
+```bash
+docker compose run --rm -e DRIFT=0 simulator   # normal term
+docker compose run --rm -e DRIFT=1 simulator   # exam-season drift
+```
+
+Stop everything: `docker compose down`
+
+## Monitoring
+
+Prometheus collects the API's request count, latency and errors:
+
+![API panels in Grafana](docs/screenshots/grafana-overview.png)
+
+Evidently compares each 5-minute window of new students with the training data. With exam-season drift, 80% of the inputs drift (in our test, 143 of 200 students were flagged at risk, versus 51 in normal mode):
+
+![Drift share after exam-season drift](docs/screenshots/grafana-drift.png)
+
+The Grafana drift alert fires:
+
+![Drift alert firing](docs/screenshots/alert-firing.png)
+
+and triggers the Prefect retraining flow automatically:
+
+![Prefect retraining runs](docs/screenshots/prefect-retrain.png)
+
+After normal traffic returns, the alert recovers:
+
+![Drift alert back to normal](docs/screenshots/alert-normal.png)
 
 For the INSY 684 monitoring setup and integration steps, see the [monitoring runbook](monitoring/README.md).
 
