@@ -232,9 +232,10 @@ For the INSY 684 monitoring setup and integration steps, see the [monitoring run
 Run the tests locally:
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt -r api/requirements.txt -r frontend/requirements.txt
 ruff check .
-pytest                                   # unit tests
+pytest                                      # unit tests (tests/ folder)
+(cd frontend && python -m pytest tests)     # web page tests
 ```
 
 Integration test (starts the API container and sends it real requests):
