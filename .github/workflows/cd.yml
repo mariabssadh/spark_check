@@ -1,0 +1,55 @@
+name: CD
+
+on:
+  push:
+    branches: [main]        # after a merge: build AND publish
+  pull_request:             # on a PR: build only, to check it works
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: read
+  packages: write           # allowed to upload images to GHCR
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: .
+            dockerfile: api/Dockerfile
+          - name: frontend
+            context: ./frontend
+            dockerfile: frontend/Dockerfile
+          - name: simulator
+            context: .
+            dockerfile: simulator/Dockerfile
+          - name: training
+            context: .
+            dockerfile: training/Dockerfile
+          - name: monitoring
+            context: .
+            dockerfile: monitoring/Dockerfile
+    steps:
+      - name: Download the code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ghcr.io/mariabssadh/spark-check-${{ matrix.name }}:latest
+            ghcr.io/mariabssadh/spark-check-${{ matrix.name }}:${{ github.sha }}
