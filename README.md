@@ -66,6 +66,21 @@ flowchart TB
 
     GHA["GitHub Actions: lint + tests on every PR"]
 ```
+## Tools
+
+| Tool | What it does in Spark Check |
+|---|---|
+| Docker Compose | Starts and stops all 11 services with one command |
+| Prefect | Runs training as a flow, and retraining when a drift alert arrives |
+| MLflow | Tracks every training run and stores the registered score and risk models |
+| FastAPI | Model API: loads the registered models, validates input, serves predictions and `/metrics` |
+| Flask | Web page where staff enter 5 survey scores and read the prediction |
+| Traffic simulator | Sends synthetic students to the API, with a switch for exam-season drift |
+| PostgreSQL | Stores every prediction and the drift and performance results |
+| Evidently | Compares each window of new students with the training data to detect drift |
+| Prometheus | Collects the API's request count, latency and errors |
+| Grafana | Dashboards and the drift alert, saved as code in `monitoring/grafana/` |
+| GitHub Actions | CI: lint, unit tests and an integration test on every push and PR. CD: builds the images and publishes them to GitHub Container Registry on merge to `main` |
 
 ## Key findings
 - **Regression:** Ridge Regression using only start-of-term PHQ-9 scores performed best, achieving a test RMSE of **2.711**, MAE of **2.051**, and R² of **0.739**. This represents a **49% reduction in RMSE** compared with the baseline mean predictor.
@@ -161,6 +176,12 @@ docker compose run --rm -e DRIFT=0 simulator   # normal term
 docker compose run --rm -e DRIFT=1 simulator   # exam-season drift
 ```
 
+To rebuild the cleaned student table from the raw StudentLife surveys:
+
+```bash
+python -m spark_check.data
+```
+
 Stop everything (keeps the database, trained models and MLflow runs):
 
 ```bash
@@ -205,6 +226,29 @@ After normal traffic returns, the alert recovers:
 For the INSY 684 monitoring setup and integration steps, see the [monitoring runbook](monitoring/README.md).
 
 [Normal traffic dashboard](monitoring/screenshots/normal.png) · [Injected drift dashboard](monitoring/screenshots/drift.png)
+
+## Testing and CI/CD
+
+Run the tests locally:
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+pytest                                   # unit tests
+```
+
+Integration test (starts the API container and sends it real requests):
+
+```bash
+docker build -f api/Dockerfile -t spark-check-api .
+docker run -d --name api-test -p 8000:8000 spark-check-api
+RUN_INTEGRATION=1 pytest tests/test_integration_api.py -v
+docker rm -f api-test
+```
+
+GitHub Actions runs all of this on every pull request, and a failing check blocks the merge. On every merge to `main`, CD builds the five images and publishes them to GitHub Container Registry:
+
+![Images published to GitHub Container Registry](docs/screenshots/ghcr-packages.png)
 
 ## Data
 StudentLife dataset: https://www.kaggle.com/datasets/dartweichen/student-life
