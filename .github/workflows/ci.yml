@@ -33,3 +33,33 @@ jobs:
           if [ -d frontend/tests ]; then
             cd frontend && python -m pytest tests
           fi   
+
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the code
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install test tools
+        run: pip install -r requirements-dev.txt
+
+      - name: Build and start the API container
+        run: |
+          docker build -f api/Dockerfile -t spark-check-api .
+          docker run -d --name api -p 8000:8000 spark-check-api
+
+      - name: Run integration test
+        env:
+          RUN_INTEGRATION: "1"
+          API_URL: http://localhost:8000
+        run: pytest tests/test_integration_api.py -v
+
+      - name: Show API logs if the test failed
+        if: failure()
+        run: docker logs api
